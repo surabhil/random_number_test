@@ -1,0 +1,35 @@
+version: 0.2
+env:
+  variables:
+    AWS_DEFAULT_REGION: "us-west-2"
+phases:
+  install:
+    commands:
+      - apt-get -y update
+      - apt-get -y install wget ssh jq
+# The standard build image has the AWS CLI and ssh-agent
+  pre_build:
+      commands:
+
+      #install terraform
+      - wget -nv https://releases.hashicorp.com/terraform/0.10.8/terraform_0.10.8_linux_amd64.zip
+      - unzip -d /usr/bin terraform_0.10.8_linux_amd64.zip
+      - terraform --version
+      # Use KMS v4 to decrypt SSH key from S3
+      - aws configure set s3.signature_version s3v4
+      - mkdir ~/.ssh && chmod 700 ~/.ssh
+      - aws s3 cp s3://apim-configs/github/github-apim1_rsa.txt ~/.ssh/github-apim1_rsa
+      - chmod 600 ~/.ssh/github-apim1_rsa
+      #set env variables for terraform provider
+      - curl 169.254.170.2$AWS_CONTAINER_CREDENTIALS_RELATIVE_URI | jq 'to_entries | [ .[] | select(.key | (contains("Expiration") or contains("RoleArn"))  | not) ] |  map(if .key == "AccessKeyId" then . + {"key":"AWS_ACCESS_KEY_ID"} else . end) | map(if .key == "SecretAccessKey" then . + {"key":"AWS_SECRET_ACCESS_KEY"} else . end) | map(if .key == "Token" then . + {"key":"AWS_SESSION_TOKEN"} else . end) | map("export \(.key)=\(.value)") | .[]' -r > /tmp/cred.txt # work around https://github.com/hashicorp/terraform/issues/8746 and 16278
+      - chmod +x /tmp/cred.txt
+      - . /tmp/cred.txt
+  build:
+    commands:
+      - ls
+      - eval `ssh-agent`
+      - ssh-add ~/.ssh/github-apim1_rsa
+      - ssh-keyscan github.com > ~/.ssh/known_hosts
+      - terraform init
+      - terraform plan
+      - terraform apply
